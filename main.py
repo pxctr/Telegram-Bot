@@ -276,25 +276,23 @@ def download_image(url: str) -> bytes | None:
 
 # ─── Telegram Fonksiyonları ──────────────────────────────────────────────────────
 
-def send_telegram_message(text: str, photo_bytes: bytes | None = None) -> bool:
-    """Telegram kanalına mesaj (ve opsiyonel fotoğraf) gönderir."""
+def send_telegram_message(text: str, photo_bytes: bytes | None = None) -> int | None:
+    """Telegram kanalına mesaj (ve opsiyonel fotoğraf) gönderir. Başarılıysa message_id döner."""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         log("❌ TELEGRAM_BOT_TOKEN veya TELEGRAM_CHAT_ID tanımlanmamış!")
-        return False
+        return None
 
     try:
         if photo_bytes:
             # Fotoğraflı mesaj gönder
             url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
             files = {"photo": ("report.jpg", photo_bytes, "image/jpeg")}
+            html_text = text_to_html(text)
             data = {
                 "chat_id": TELEGRAM_CHAT_ID,
-                "caption": text[:1024],  # Telegram caption limiti
+                "caption": html_text[:1024],  # Telegram caption limiti
                 "parse_mode": "HTML",
             }
-            # Markdown yerine HTML kullan (daha az parse hatası)
-            html_text = text_to_html(text)
-            data["caption"] = html_text[:1024]
             response = requests.post(url, data=data, files=files, timeout=30)
         else:
             # Sadece metin mesaj gönder
@@ -310,8 +308,9 @@ def send_telegram_message(text: str, photo_bytes: bytes | None = None) -> bool:
 
         result = response.json()
         if result.get("ok"):
-            log("✅ Telegram mesajı gönderildi!")
-            return True
+            message_id = result.get("result", {}).get("message_id")
+            log(f"✅ Telegram mesajı gönderildi! (message_id: {message_id})")
+            return message_id
         else:
             error_desc = result.get("description", "Bilinmeyen hata")
             log(f"❌ Telegram hatası: {error_desc}")
@@ -319,11 +318,11 @@ def send_telegram_message(text: str, photo_bytes: bytes | None = None) -> bool:
             if "parse" in error_desc.lower() or "can't" in error_desc.lower():
                 log("🔄 Düz metin olarak tekrar deneniyor...")
                 return send_telegram_plain(text, photo_bytes)
-            return False
+            return None
 
     except requests.exceptions.RequestException as e:
         log(f"❌ Telegram bağlantı hatası: {e}")
-        return False
+        return None
 
 
 def text_to_html(text: str) -> str:
@@ -335,8 +334,8 @@ def text_to_html(text: str) -> str:
     return text
 
 
-def send_telegram_plain(text: str, photo_bytes: bytes | None = None) -> bool:
-    """Düz metin olarak gönderir (fallback)."""
+def send_telegram_plain(text: str, photo_bytes: bytes | None = None) -> int | None:
+    """Düz metin olarak gönderir (fallback). Başarılıysa message_id döner."""
     try:
         if photo_bytes:
             url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
@@ -349,14 +348,16 @@ def send_telegram_plain(text: str, photo_bytes: bytes | None = None) -> bool:
             response = requests.post(url, json=data, timeout=30)
 
         result = response.json()
-        return result.get("ok", False)
+        if result.get("ok"):
+            return result.get("result", {}).get("message_id")
+        return None
     except Exception as e:
         log(f"❌ Fallback gönderim hatası: {e}")
-        return False
+        return None
 
 
-def send_telegram_location(latitude: float, longitude: float) -> bool:
-    """Telegram kanalına konum pini gönderir."""
+def send_telegram_location(latitude: float, longitude: float, reply_to_message_id: int | None = None) -> bool:
+    """Telegram kanalına konum pini gönderir. reply_to_message_id verilirse yanıt olarak gönderir."""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         return False
 
@@ -367,10 +368,12 @@ def send_telegram_location(latitude: float, longitude: float) -> bool:
             "latitude": latitude,
             "longitude": longitude,
         }
+        if reply_to_message_id:
+            data["reply_to_message_id"] = reply_to_message_id
         response = requests.post(url, json=data, timeout=30)
         result = response.json()
         if result.get("ok"):
-            log("📍 Konum pini gönderildi!")
+            log("📍 Konum pini gönderildi (yanıt olarak)!")
             return True
         else:
             log(f"⚠️ Konum gönderilemedi: {result.get('description', '')}")
@@ -456,16 +459,16 @@ async def process_new_reports():
                 photo_bytes = download_image(photo_url)
 
         # Telegram'a gönder
-        success = send_telegram_message(message, photo_bytes)
-        if success:
+        message_id = send_telegram_message(message, photo_bytes)
+        if message_id:
             sent_count += 1
             total_sent += 1
 
-            # Konum pini gönder
+            # Konum pini gönder (mesaja yanıt olarak)
             coords = extract_coordinates(report)
             if coords:
                 time.sleep(0.5)
-                send_telegram_location(coords[0], coords[1])
+                send_telegram_location(coords[0], coords[1], reply_to_message_id=message_id)
         else:
             log(f"⚠️ Rapor #{report_id} gönderilemedi, devam ediliyor...")
 
