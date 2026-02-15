@@ -143,7 +143,6 @@ def format_telegram_message(report: dict) -> str:
 
     message = (
         f"{category_emoji}\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
         f"\n"
         f"📍 {location}\n"
         f"🏛️ {state}\n"
@@ -152,7 +151,6 @@ def format_telegram_message(report: dict) -> str:
         f"{officials_text}"
         f"{desc_text}\n"
         f"\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
         f"📢 {TELEGRAM_CHANNEL_LINK}"
     )
     return message
