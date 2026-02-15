@@ -19,8 +19,8 @@ from playwright.async_api import async_playwright
 
 # ─── Ayarlar ────────────────────────────────────────────────────────────────────
 
-ICEOUT_WEB_URL = "https://iceout.org/en/reportInfo/{id}"
 ICEOUT_SITE_URL = "https://iceout.org/en/"
+TELEGRAM_CHANNEL_LINK = "t.me/ice_latte_usa"
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
@@ -123,15 +123,12 @@ def format_datetime(iso_string: str) -> str:
 
 def format_telegram_message(report: dict) -> str:
     """Bir raporu Telegram mesaj formatına dönüştürür."""
-    report_id = report.get("id", "?")
     location = report.get("location_description", "Konum belirtilmemiş")
     incident_time = format_datetime(report.get("incident_time", ""))
-    created_at = format_datetime(report.get("created_at", ""))
     description = report.get("activity_description", "")
     category_num = report.get("category_enum", 3)
     category_emoji, category_name = CATEGORY_MAP.get(category_num, ("🟣 Other", "Other"))
     state = extract_state_from_location(location)
-    web_url = ICEOUT_WEB_URL.format(id=report_id)
 
     # Doğrulama durumu
     approved = report.get("approved", False)
@@ -155,11 +152,34 @@ def format_telegram_message(report: dict) -> str:
         f"{officials_text}"
         f"{desc_text}\n"
         f"\n"
-        f"🔗 Details: {web_url}\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"📡 iceout.org • #{report_id}"
+        f"📢 {TELEGRAM_CHANNEL_LINK}"
     )
     return message
+
+
+def extract_coordinates(report: dict) -> tuple[float, float] | None:
+    """
+    Rapordan GPS koordinatlarını çıkarır.
+    GeoJSON formatı: {"type": "Point", "coordinates": [longitude, latitude]}
+    Returns: (latitude, longitude) tuple veya None
+    """
+    location = report.get("location")
+    if not location:
+        return None
+
+    coords = location.get("coordinates")
+    if not coords or len(coords) < 2:
+        return None
+
+    # GeoJSON: [longitude, latitude] -> Telegram: (latitude, longitude)
+    longitude = coords[0]
+    latitude = coords[1]
+
+    if latitude == 0 and longitude == 0:
+        return None
+
+    return (latitude, longitude)
 
 
 # ─── API Fonksiyonları (Playwright ile) ──────────────────────────────────────────
@@ -335,6 +355,31 @@ def send_telegram_plain(text: str, photo_bytes: bytes | None = None) -> bool:
         return False
 
 
+def send_telegram_location(latitude: float, longitude: float) -> bool:
+    """Telegram kanalına konum pini gönderir."""
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        return False
+
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendLocation"
+        data = {
+            "chat_id": TELEGRAM_CHAT_ID,
+            "latitude": latitude,
+            "longitude": longitude,
+        }
+        response = requests.post(url, json=data, timeout=30)
+        result = response.json()
+        if result.get("ok"):
+            log("📍 Konum pini gönderildi!")
+            return True
+        else:
+            log(f"⚠️ Konum gönderilemedi: {result.get('description', '')}")
+            return False
+    except requests.exceptions.RequestException as e:
+        log(f"⚠️ Konum gönderim hatası: {e}")
+        return False
+
+
 # ─── Ana Çalışma Fonksiyonu ──────────────────────────────────────────────────────
 
 async def process_new_reports():
@@ -415,6 +460,12 @@ async def process_new_reports():
         if success:
             sent_count += 1
             total_sent += 1
+
+            # Konum pini gönder
+            coords = extract_coordinates(report)
+            if coords:
+                time.sleep(0.5)
+                send_telegram_location(coords[0], coords[1])
         else:
             log(f"⚠️ Rapor #{report_id} gönderilemedi, devam ediliyor...")
 
