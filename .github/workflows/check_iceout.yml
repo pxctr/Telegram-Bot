@@ -7,6 +7,12 @@ on:
 
   # Manuel tetikleme (test için)
   workflow_dispatch:
+    inputs:
+      force_resend:
+        description: 'Son raporları tekrar gönder (test için)'
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   check-and-notify:
@@ -34,12 +40,18 @@ jobs:
 
       # 4. Önceki state'i cache'den geri yükle
       - name: Restore state from cache
+        if: ${{ github.event.inputs.force_resend != 'true' }}
         uses: actions/cache/restore@v4
         with:
           path: last_seen.json
           key: iceout-state-dummy
           restore-keys: |
             iceout-state-
+
+      # 4b. Force resend: state'i sıfırla
+      - name: Reset state for resend
+        if: ${{ github.event.inputs.force_resend == 'true' }}
+        run: echo '{"last_seen_id":0,"total_sent":0}' > last_seen.json
 
       # 5. Botu çalıştır
       - name: Run IceOut Bot
