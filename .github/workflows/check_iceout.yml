@@ -1,0 +1,57 @@
+name: IceOut Telegram Bot
+
+on:
+  # Her 30 dakikada bir otomatik çalıştır
+  schedule:
+    - cron: '*/30 * * * *'
+
+  # Manuel tetikleme (test için)
+  workflow_dispatch:
+
+jobs:
+  check-and-notify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      # 1. Repo kodunu çek
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2. Python kur
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      # 3. Bağımlılıkları yükle
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          python -m playwright install chromium
+          python -m playwright install-deps chromium
+
+      # 4. Önceki state'i cache'den geri yükle
+      - name: Restore state from cache
+        uses: actions/cache/restore@v4
+        with:
+          path: last_seen.json
+          key: iceout-state-dummy
+          restore-keys: |
+            iceout-state-
+
+      # 5. Botu çalıştır
+      - name: Run IceOut Bot
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python main.py
+
+      # 6. State'i cache'e kaydet
+      - name: Save state to cache
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: last_seen.json
+          key: iceout-state-${{ github.run_id }}-${{ github.run_attempt }}
