@@ -30,8 +30,8 @@ STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "last_seen
 # İlk çalıştırmada kaç rapor gönderilsin (spam olmasın diye sınırlı)
 FIRST_RUN_LIMIT = 3
 
-# API'den kaç rapor çekilsin
-FETCH_LIMIT = 30
+# API'den kaç rapor çekilsin (API eskiden yeniye sıralıyor, yeterince çekmemiz lazım)
+FETCH_LIMIT = 500
 
 # Kategori eşlemeleri
 CATEGORY_MAP = {
@@ -211,6 +211,8 @@ async def fetch_reports_via_browser(limit: int = FETCH_LIMIT) -> list:
             log(f"🍪 Cookie'ler alındı: {cookie_names}")
 
             # API'den raporları çek (browser context içinde)
+            # NOT: API raporları eskiden yeniye (ascending) sıralıyor.
+            # Bu yüzden yeterince çok rapor çekip kendi tarafımızda sıralıyoruz.
             log(f"📡 API'den son {limit} rapor çekiliyor...")
             reports = await page.evaluate(
                 """
@@ -224,7 +226,10 @@ async def fetch_reports_via_browser(limit: int = FETCH_LIMIT) -> list:
                             return { error: `HTTP ${response.status}`, data: [] };
                         }
                         const data = await response.json();
-                        return { error: null, data: data };
+                        // En yeni raporları almak için ID'ye göre büyükten küçüğe sırala
+                        data.sort((a, b) => b.id - a.id);
+                        // Sadece en yeni 50 raporu döndür (hafıza tasarrufu)
+                        return { error: null, data: data.slice(0, 50) };
                     } catch (e) {
                         return { error: e.message, data: [] };
                     }
