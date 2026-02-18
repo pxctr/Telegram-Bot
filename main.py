@@ -428,6 +428,21 @@ async def process_new_reports():
 
     log(f"🆕 {len(new_reports)} yeni rapor bulundu!")
 
+    # Sadece Critical (category_enum == 0) raporları gönder
+    critical_reports = [r for r in new_reports if r.get("category_enum") == 0]
+    skipped = len(new_reports) - len(critical_reports)
+    if skipped > 0:
+        log(f"⏭️ {skipped} rapor atlandı (sadece Critical gönderiliyor)")
+    if not critical_reports:
+        log("✨ Yeni Critical rapor yok.")
+        max_id = max(r.get("id", 0) for r in reports)
+        state["last_seen_id"] = max_id
+        state["last_check"] = datetime.now(timezone.utc).isoformat()
+        save_state(state)
+        return
+    new_reports = critical_reports
+    log(f"🔴 {len(new_reports)} Critical rapor gönderilecek")
+
     # İlk çalıştırmada çok fazla göndermemek için sınırla
     if is_first_run and len(new_reports) > FIRST_RUN_LIMIT:
         log(f"📋 İlk çalıştırma: sadece son {FIRST_RUN_LIMIT} rapor gönderilecek")
