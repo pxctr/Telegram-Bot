@@ -203,6 +203,10 @@ async def fetch_reports_via_browser(limit: int = FETCH_LIMIT) -> list:
 
             # Siteye git ve cookie'leri al
             log("📡 iceout.org'a bağlanılıyor...")
+            
+            # Browser console loglarını Python loglarına aktar
+            page.on("console", lambda msg: log(f"🌐 [Browser Console] {msg.text}"))
+
             await page.goto(ICEOUT_SITE_URL, wait_until="networkidle", timeout=45000)
             await page.wait_for_timeout(3000)
 
@@ -230,13 +234,23 @@ async def fetch_reports_via_browser(limit: int = FETCH_LIMIT) -> list:
                         if (!response.ok) {
                             return { error: `HTTP ${response.status}`, data: [] };
                         }
-                        const data = await response.json();
-                        console.log(`Fetched ${data.length} reports from API`);
+                        const resData = await response.json();
+                        console.log(`API Response Type: ${typeof resData}, IsArray: ${Array.isArray(resData)}`);
+                        
+                        // Eğer array değilse listeyi bulmaya çalış (örn: DRF results)
+                        let reports = Array.isArray(resData) ? resData : (resData.results || resData.data || []);
+                        
+                        if (!Array.isArray(reports)) {
+                            return { error: `Expected array but got ${typeof reports}`, data: [] };
+                        }
+
+                        console.log(`Processing ${reports.length} reports...`);
+                        
                         // En yeni raporları almak için ID'ye göre büyükten küçüğe sırala
-                        data.sort((a, b) => b.id - a.id);
+                        reports.sort((a, b) => (b.id || 0) - (a.id || 0));
+                        
                         // Sadece en yeni 50 raporu döndür (hafıza tasarrufu)
-                        const result = data.slice(0, 50);
-                        console.log(`Returning ${result.length} reports to python`);
+                        const result = reports.slice(0, 50);
                         return { error: null, data: result };
                     } catch (e) {
                         return { error: e.message, data: [] };
