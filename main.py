@@ -487,19 +487,29 @@ async def process_new_reports():
         # Mesajı oluştur
         message = format_telegram_message(report)
 
-        # Fotoğraf var mı kontrol et
+        # Fotoğraf var mı kontrol et (Root level veya media listesi içinde)
         photo_bytes = None
-        media = report.get("media", [])
-        if media:
-            first_media = media[0]
-            # Thumbnail daha hızlı indirilir, yoksa orijinal resmi dene
-            photo_url = (
-                first_media.get("medium_thumbnail")
-                or first_media.get("small_thumbnail")
-                or first_media.get("image")
-            )
-            if photo_url:
-                photo_bytes = download_image(photo_url)
+        
+        # 1. Root seviyesindeki thumnail'ları kontrol et
+        photo_url = (
+            report.get("medium_thumbnail")
+            or report.get("small_thumbnail")
+            or report.get("image")
+        )
+
+        # 2. Eğer root'ta yoksa media listesine bak
+        if not photo_url:
+            media = report.get("media", [])
+            if media:
+                first_media = media[0]
+                photo_url = (
+                    first_media.get("medium_thumbnail")
+                    or first_media.get("small_thumbnail")
+                    or first_media.get("image")
+                )
+
+        if photo_url:
+            photo_bytes = download_image(photo_url)
 
         # Telegram'a gönder
         message_id = send_telegram_message(message, photo_bytes)
