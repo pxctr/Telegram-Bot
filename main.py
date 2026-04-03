@@ -231,10 +231,13 @@ async def fetch_reports_via_browser(limit: int = FETCH_LIMIT) -> list:
                             return { error: `HTTP ${response.status}`, data: [] };
                         }
                         const data = await response.json();
+                        console.log(`Fetched ${data.length} reports from API`);
                         // En yeni raporları almak için ID'ye göre büyükten küçüğe sırala
                         data.sort((a, b) => b.id - a.id);
                         // Sadece en yeni 50 raporu döndür (hafıza tasarrufu)
-                        return { error: null, data: data.slice(0, 50) };
+                        const result = data.slice(0, 50);
+                        console.log(`Returning ${result.length} reports to python`);
+                        return { error: null, data: result };
                     } catch (e) {
                         return { error: e.message, data: [] };
                     }
@@ -412,8 +415,10 @@ async def process_new_reports():
     # Raporları çek (Playwright ile)
     reports = await fetch_reports_via_browser(FETCH_LIMIT)
     if not reports:
-        log("📭 Rapor bulunamadı veya bağlantı hatası. Çıkılıyor.")
+        log("📭 Rapor bulunamadı veya bağlantı hatası (reports listesi boş). Çıkılıyor.")
         return
+    
+    log(f"📊 Toplam {len(reports)} rapor inceleniyor...")
 
     # Raporları ID'ye göre sırala (küçükten büyüğe — eskiden yeniye)
     reports.sort(key=lambda r: r.get("id", 0))
