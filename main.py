@@ -219,8 +219,13 @@ async def fetch_reports_via_browser(limit: int = FETCH_LIMIT) -> list:
                 async (limit) => {
                     try {
                         const response = await fetch(
-                            `/api/reports/?count=${limit}`,
-                            { credentials: 'include' }
+                            '/api/reports/',
+                            { 
+                                credentials: 'include',
+                                headers: {
+                                    'x-api-version': '1.8'
+                                }
+                            }
                         );
                         if (!response.ok) {
                             return { error: `HTTP ${response.status}`, data: [] };
