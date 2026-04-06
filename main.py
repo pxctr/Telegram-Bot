@@ -182,12 +182,12 @@ def extract_coordinates(report: dict) -> tuple[float, float] | None:
 
 # ─── API Fonksiyonları (Playwright ile) ──────────────────────────────────────────
 
-async def fetch_reports_via_browser(limit: int = FETCH_LIMIT) -> list:
+async def fetch_reports_via_browser(last_seen_id: int = 0, limit: int = FETCH_LIMIT) -> list:
     """
     Playwright headless browser kullanarak iceout.org API'sine erişir.
     Site CSRF + session cookie gerektirdiği için bu yöntem gerekli.
     """
-    log(f"🌐 Headless browser başlatılıyor...")
+    log(f"🌐 Headless browser başlatılıyor (Last Seen ID: {last_seen_id})...")
 
     try:
         async with async_playwright() as p:
@@ -210,54 +210,75 @@ async def fetch_reports_via_browser(limit: int = FETCH_LIMIT) -> list:
             await page.goto(ICEOUT_SITE_URL, wait_until="networkidle", timeout=45000)
             await page.wait_for_timeout(3000)
 
-            cookies = await context.cookies()
-            cookie_names = [c["name"] for c in cookies]
-            log(f"🍪 Cookie'ler alındı: {cookie_names}")
-
             # API'den raporları çek (browser context içinde)
-            # NOT: API raporları eskiden yeniye (ascending) sıralıyor.
-            # Bu yüzden yeterince çok rapor çekip kendi tarafımızda sıralıyoruz.
-            log(f"📡 API'den son {limit} rapor çekiliyor...")
+            log(f"📡 API'den raporlar çekiliyor ve yeni olanların detayları alınıyor...")
             reports = await page.evaluate(
                 """
-                async (limit) => {
+                async ({ last_seen_id, limit }) => {
                     try {
+                        const headers = { 'x-api-version': '1.8' };
                         const response = await fetch(
                             '/api/reports/',
                             { 
                                 credentials: 'include',
-                                headers: {
-                                    'x-api-version': '1.8'
-                                }
+                                headers: headers
                             }
                         );
                         if (!response.ok) {
                             return { error: `HTTP ${response.status}`, data: [] };
                         }
                         const resData = await response.json();
-                        console.log(`API Response Type: ${typeof resData}, IsArray: ${Array.isArray(resData)}`);
                         
-                        // Eğer array değilse listeyi bulmaya çalış (örn: DRF results)
                         let reports = Array.isArray(resData) ? resData : (resData.results || resData.data || []);
-                        
                         if (!Array.isArray(reports)) {
                             return { error: `Expected array but got ${typeof reports}`, data: [] };
                         }
 
-                        console.log(`Processing ${reports.length} reports...`);
-                        
-                        // En yeni raporları almak için ID'ye göre büyükten küçüğe sırala
+                        // En yeni raporları başa alacak şekilde ID'ye göre büyükten küçüğe sırala
                         reports.sort((a, b) => (b.id || 0) - (a.id || 0));
                         
-                        // Sadece en yeni 50 raporu döndür (hafıza tasarrufu)
-                        const result = reports.slice(0, 50);
-                        return { error: null, data: result };
+                        // Sadece yeni olan raporların veya en yeni 50 raporun detaylarını çek 
+                        // (Böylece yüksek çözünürlüklü fotoğraflar alınabilir)
+                        const targetReports = reports.filter(r => (r.id || 0) > last_seen_id).slice(0, 100);
+                        
+                        // Eğer hiç yeni rapor yoksa bile state güncellemesi vs için en yeni 10 taneyi alalım
+                        const toFetch = targetReports.length > 0 ? targetReports : reports.slice(0, 10);
+                        
+                        console.log(`Fetching details for ${toFetch.length} reports for high-res images...`);
+                        
+                        const fetchDetail = async (report) => {
+                            try {
+                                const detailResponse = await fetch(`/api/reports/${report.id}/`, { 
+                                    credentials: 'include',
+                                    headers: headers 
+                                });
+                                if (detailResponse.ok) {
+                                    const detailData = await detailResponse.json();
+                                    // Detay verisindeki media listesini rapora ekle
+                                    report.media = detailData.media || [];
+                                    // Root seviyedeki alanları da güncelle
+                                    if (detailData.image) report.image = detailData.image;
+                                    if (detailData.medium_thumbnail) report.medium_thumbnail = detailData.medium_thumbnail;
+                                    if (detailData.small_thumbnail) report.small_thumbnail = detailData.small_thumbnail;
+                                }
+                            } catch (e) {
+                                console.error(`Error fetching detail for report ${report.id}:`, e);
+                            }
+                        };
+
+                        // Paralel olarak detayları çek (max 10'arlı gruplar halinde rate limit olmasın diye)
+                        for (let i = 0; i < toFetch.length; i += 10) {
+                            const chunk = toFetch.slice(i, i + 10);
+                            await Promise.all(chunk.map(fetchDetail));
+                        }
+
+                        return { error: null, data: reports };
                     } catch (e) {
                         return { error: e.message, data: [] };
                     }
                 }
                 """,
-                limit,
+                {"last_seen_id": last_seen_id, "limit": limit},
             )
 
             await browser.close()
@@ -277,22 +298,27 @@ async def fetch_reports_via_browser(limit: int = FETCH_LIMIT) -> list:
 
 def download_image(url: str) -> bytes | None:
     """Fotoğrafı indirir ve bytes olarak döndürür."""
+    # Eğer URL relative ise (örn: /media/...) absolute yap
+    if url.startswith("/"):
+        url = "https://iceout.org" + url
+
     try:
-        log(f"📥 Fotoğraf indiriliyor...")
+        log(f"📥 Fotoğraf indiriliyor: {url}")
         response = requests.get(
             url,
             timeout=30,
             headers={
                 "User-Agent": (
                     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                    "AppleWebKit/537.36"
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/131.0.0.0 Safari/537.36"
                 ),
             },
         )
         response.raise_for_status()
         content = response.content
         size_kb = len(content) / 1024
-        log(f"✅ Fotoğraf indirildi ({size_kb:.0f} KB)")
+        log(f"✅ Fotoğraf indirildi ({size_kb:.1f} KB)")
         return content
     except requests.exceptions.RequestException as e:
         log(f"⚠️ Fotoğraf indirilemedi: {e}")
@@ -427,7 +453,7 @@ async def process_new_reports():
         log(f"📌 Son görülen ID: {last_seen_id}")
 
     # Raporları çek (Playwright ile)
-    reports = await fetch_reports_via_browser(FETCH_LIMIT)
+    reports = await fetch_reports_via_browser(last_seen_id, FETCH_LIMIT)
     if not reports:
         log("📭 Rapor bulunamadı veya bağlantı hatası (reports listesi boş). Çıkılıyor.")
         return
@@ -490,25 +516,35 @@ async def process_new_reports():
         # Fotoğraf var mı kontrol et (Root level veya media listesi içinde)
         photo_bytes = None
         
-        # 1. Root seviyesindeki thumnail'ları kontrol et
-        photo_url = (
-            report.get("medium_thumbnail")
-            or report.get("small_thumbnail")
-            or report.get("image")
-        )
+        # Öncelik Sırası:
+        # 1. 'image' (Orijinal/Full çözünürlük)
+        # 2. 'medium_thumbnail' (Orta çözünürlük)
+        # 3. 'small_thumbnail' (Düşük çözünürlük)
 
-        # 2. Eğer root'ta yoksa media listesine bak
-        if not photo_url:
-            media = report.get("media", [])
-            if media:
-                first_media = media[0]
+        # Önce media listesine bak (dahili detay bilgisinden gelen)
+        media = report.get("media", [])
+        photo_url = None
+        
+        if media:
+            first_media = media[0]
+            # Sadece fotoğraf olanları al (media_type 'I' veya 'video' alanı boş olanlar)
+            if first_media.get("media_type") == "I" or not first_media.get("video"):
                 photo_url = (
-                    first_media.get("medium_thumbnail")
+                    first_media.get("image")
+                    or first_media.get("medium_thumbnail")
                     or first_media.get("small_thumbnail")
-                    or first_media.get("image")
                 )
+        
+        # Eğer media listesinde yoksa root seviyesindeki alanlara bak
+        if not photo_url:
+            photo_url = (
+                report.get("image")
+                or report.get("medium_thumbnail")
+                or report.get("small_thumbnail")
+            )
 
         if photo_url:
+            log(f"📸 Fotoğraf seçildi: {photo_url}")
             photo_bytes = download_image(photo_url)
 
         # Telegram'a gönder
